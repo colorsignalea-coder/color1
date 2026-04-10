@@ -248,13 +248,28 @@ class RunControlTab(ttk.Frame):
         B(ctrl_row_file, "📄 찾기", "#0e7490", self._find_files_manually,
           pady=2, padx=8, font=("Malgun Gothic", 8)).pack(side="right", padx=(0, 2))
 
-        # 버튼행 2: 큐 시작 + 상태
+        # 버튼행 2: 큐 시작 + 라운드 선택 + 일시정지
         ctrl_row2 = tk.Frame(queue_f, bg=self.PNL)
         ctrl_row2.pack(fill="x", padx=8, pady=(1, 6))
         self.btn_queue = B(ctrl_row2, "▶  선택 폴더 큐 시작", "#7c3aed",
                            self._run_folder_queue,
                            font=("Malgun Gothic", 10, "bold"), pady=4, padx=16)
         self.btn_queue.pack(side="left")
+
+        # 라운드 수 선택 (1~6)
+        self._max_rounds_var = tk.IntVar(value=1)
+        tk.Label(ctrl_row2, text="라운드:", font=("Malgun Gothic", 8),
+                 bg=self.PNL, fg="#a78bfa").pack(side="left", padx=(10, 2))
+        self._round_btns = {}
+        for r in [1, 2, 3, 4, 5, 6]:
+            _rb = tk.Button(ctrl_row2, text=str(r),
+                            font=("Malgun Gothic", 8, "bold"),
+                            relief="flat", bd=0, padx=7, pady=3, cursor="hand2",
+                            command=lambda v=r: self._set_max_rounds(v))
+            _rb.pack(side="left", padx=1)
+            self._round_btns[r] = _rb
+        self._set_max_rounds(1)
+
         self._paused = False
         self._btn_pause = tk.Button(ctrl_row2, text="⏸ 일시정지",
                                     font=("Malgun Gothic", 9, "bold"),
@@ -1025,6 +1040,14 @@ class RunControlTab(ttk.Frame):
             v.set(False)
         self._update_queue_status_label()
 
+    def _set_max_rounds(self, val):
+        self._max_rounds_var.set(val)
+        for v, btn in self._round_btns.items():
+            if v == val:
+                btn.config(bg="#7c3aed", fg="white")
+            else:
+                btn.config(bg="#1e3a5f", fg="#94a3b8")
+
     def _toggle_pause(self):
         """일시정지 / 재개 토글."""
         pause_file = os.path.join(self.G4_CONFIGS, 'runner_pause.signal')
@@ -1335,11 +1358,13 @@ class RunControlTab(ttk.Frame):
         
         sel_file = os.path.join(self.G4_CONFIGS, "queue_selected.json")
         os.makedirs(self.G4_CONFIGS, exist_ok=True)
+        max_rounds = max(1, self._max_rounds_var.get())
         with open(sel_file, "w", encoding="utf-8") as f:
             _json.dump({
                 "selected": selected,
                 "file_filter": file_filter,
-                "filter_folder": self._last_sel_folder
+                "filter_folder": self._last_sel_folder,
+                "max_rounds": max_rounds
             }, f, ensure_ascii=False)
 
         self._queue_start_time = time.time()

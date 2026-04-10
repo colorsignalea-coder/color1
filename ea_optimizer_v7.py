@@ -995,9 +995,10 @@ def run_folder_queue():
             fq.mark_error(folder_name, '?좏슚??EA ?놁쓬')
             continue
 
-        # ── R1 백테스트 실행 (LHS 기반) ─────────────────────────
+        # ── R1: 기존 결과 있으면 로드, 없으면 백테스트 실행 ────────
         round_num = 1
         all_round_results = []
+        safe = folder_name.replace(' ', '_')
 
         def _clean_flags(rn):
             for _f in [f'round_{rn}_progress.json', 'command.json', 'test_completed.flag']:
@@ -1006,40 +1007,62 @@ def run_folder_queue():
                     try: os.remove(_p)
                     except: pass
 
-        try:
-            _clean_flags(round_num)
-            results = run_round(round_num, scenarios_map)
-        except Exception as e:
-            print('  [ERR] %s R1 실행 오류: %s' % (folder_name, e))
-            _log_debug(f"폴더 실행 중 에러 발생: {e}")
-            fq.mark_error(folder_name, f'실행 오류: {e}')
-            continue
-        finally:
-            _clean_flags(round_num)
+        # 기존 R1 결과 파일 탐색 (폴더명 기반)
+        _existing_r1 = sorted(glob.glob(
+            os.path.join(RESULTS_DIR, 'V7_FOLDER_%s*.json' % safe[:20])))
+        _loaded_prev = []
+        for _rf in _existing_r1:
+            try:
+                with open(_rf, encoding='utf-8') as _fp:
+                    _rd = json.load(_fp)
+                _rr = _rd.get('results', [])
+                if _rr:
+                    _loaded_prev.extend(_rr)
+            except Exception:
+                pass
 
-        all_round_results.extend(results or [])
+        _max_rounds = int(_sel_data.get('max_rounds', 1)) if _sel_data else 1
 
-        # R1 결과 저장
-        ts   = datetime.now().strftime('%m%d_%H%M')
-        safe = folder_name.replace(' ', '_')
-        rfile = os.path.join(RESULTS_DIR, 'V7_FOLDER_%s_R01_%s.json' % (safe, ts))
-        try:
-            with open(rfile, 'w', encoding='utf-8') as f:
-                json.dump({'mode': 'folder_queue', 'folder': folder_name,
-                           'round': 1, 'symbols': SYMBOLS, 'timeframes': TIMEFRAMES,
-                           'from_date': FROM_DATE, 'to_date': TO_DATE,
-                           'results': results}, f, indent=2, ensure_ascii=False)
-            print('  [QUEUE] R1 결과 저장: %s' % os.path.basename(rfile))
-        except Exception as e:
-            print('  [WARN] R1 결과 저장 실패: %s' % e)
+        if _loaded_prev and _max_rounds > 1:
+            # 기존 결과 사용 → R1 스킵
+            all_round_results = _loaded_prev
+            print('  [QUEUE] %s: 기존 R1 결과 %d개 로드 → R2부터 진화 시작' % (folder_name, len(_loaded_prev)))
+            round_num = 2  # R2부터 시작
+        else:
+            # R1 신규 실행
+            try:
+                _clean_flags(round_num)
+                results = run_round(round_num, scenarios_map)
+            except Exception as e:
+                print('  [ERR] %s R1 실행 오류: %s' % (folder_name, e))
+                _log_debug(f"폴더 실행 중 에러 발생: {e}")
+                fq.mark_error(folder_name, f'실행 오류: {e}')
+                continue
+            finally:
+                _clean_flags(round_num)
+
+            all_round_results.extend(results or [])
+
+            # R1 결과 저장
+            ts   = datetime.now().strftime('%m%d_%H%M')
+            rfile = os.path.join(RESULTS_DIR, 'V7_FOLDER_%s_R01_%s.json' % (safe, ts))
+            try:
+                with open(rfile, 'w', encoding='utf-8') as f:
+                    json.dump({'mode': 'folder_queue', 'folder': folder_name,
+                               'round': 1, 'symbols': SYMBOLS, 'timeframes': TIMEFRAMES,
+                               'from_date': FROM_DATE, 'to_date': TO_DATE,
+                               'results': results}, f, indent=2, ensure_ascii=False)
+                print('  [QUEUE] R1 결과 저장: %s' % os.path.basename(rfile))
+            except Exception as e:
+                print('  [WARN] R1 결과 저장 실패: %s' % e)
 
         # ── R2~N: LHS→FOCUSED→GENETIC 자동 진화 ─────────────
         from core.sampler import get_samples_for_round
         from core.param_space import make_g4_param_space
         _param_space = make_g4_param_space(extra_params=True)
-        _max_rounds = int(_sel_data.get('max_rounds', 1)) if _sel_data else 1
+        # round_num은 위에서 설정됨: 기존결과 있으면 2, 없으면 2(R1 완료 후)
 
-        for round_num in range(2, _max_rounds + 1):
+        for round_num in range(round_num, _max_rounds + 1):
             if os.path.exists(_stop_file):
                 print('  [QUEUE] 정지 신호 — 라운드 진화 중단')
                 break
