@@ -60,6 +60,32 @@ EXPERTS_DIR = os.path.join(MT4_DIR, r'MQL4\Experts')
 BACKUP_ROOT = os.path.join(MT4_DIR, r'MQL4\_EXPERTS_BACKUP_V7')
 ME_EXE      = os.path.join(MT4_DIR, 'metaeditor.exe')
 
+def _cleanup_experts_keep_round(round_num):
+    """Experts 폴더에서 현재 라운드(R{n}) 파일만 남기고 나머지 .ex4/.mq4 백업 이동."""
+    pattern_keep = f'G4v7_*_R{round_num}*'
+    ts = datetime.now().strftime('%m%d_%H%M')
+    bak = os.path.join(BACKUP_ROOT, f'cleanup_before_R{round_num}_{ts}')
+    moved = 0
+    for fname in os.listdir(EXPERTS_DIR):
+        if not (fname.endswith('.ex4') or fname.endswith('.mq4')):
+            continue
+        # 현재 라운드 파일은 유지
+        if fname.startswith(f'G4v7_') and f'_R{round_num}' in fname:
+            continue
+        # 나머지 이동
+        src = os.path.join(EXPERTS_DIR, fname)
+        os.makedirs(bak, exist_ok=True)
+        try:
+            shutil.move(src, os.path.join(bak, fname))
+            moved += 1
+        except Exception:
+            pass
+    if moved:
+        print(f'  [CLEANUP] R{round_num} 외 파일 {moved}개 → {os.path.basename(bak)}')
+    else:
+        print(f'  [CLEANUP] Experts 폴더 이미 R{round_num} 파일만 있음')
+
+
 def _restart_mt4_for_new_round():
     """새 EA 파일 인식을 위해 MT4 재시작 (라운드 전환 시 호출)."""
     print('  [MT4] 새 EA 파일 인식 위해 MT4 재시작...')
@@ -1106,6 +1132,8 @@ def run_folder_queue():
                 samples = get_samples_for_round(_param_space, round_num, prev,
                                                 n=SAMPLES_PER_ROUND, seed=42 + round_num)
                 new_scenarios = generate_round_files(samples, round_num)
+                # 현재 라운드 파일만 남기고 나머지 백업 이동
+                _cleanup_experts_keep_round(round_num)
                 # 새 EA 파일 인식을 위해 MT4 재시작
                 _restart_mt4_for_new_round()
             except Exception as e:
@@ -1254,6 +1282,8 @@ if __name__ == '__main__':
                 print('  [ERR] R%d 시나리오 없음' % _rn)
                 break
 
+            # 현재 라운드 파일만 남기고 나머지 백업 이동
+            _cleanup_experts_keep_round(_rn)
             # 새 EA 파일 인식을 위해 MT4 재시작
             _restart_mt4_for_new_round()
 
