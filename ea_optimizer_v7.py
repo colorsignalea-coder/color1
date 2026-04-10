@@ -32,6 +32,22 @@ READY_DIR   = os.path.join(REPORTS_BASE, 'READY_FOR_TEST')   # ?뚯뒪???湲?E
 AFTER_DIR   = os.path.join(REPORTS_BASE, 'AFTER_FOR_TEST')   # ?뚯뒪???꾨즺 EA 蹂닿?
 
 def _find_mt4():
+    # 1순위: current_config.ini의 terminal_path (어떤 PC에서도 동작)
+    try:
+        cfg_path = os.path.join(SOLO_DIR, 'configs', 'current_config.ini')
+        if os.path.exists(cfg_path):
+            with open(cfg_path, 'rb') as _f:
+                _raw = _f.read()
+            _text = _raw[2:].decode('utf-16-le') if _raw[:2] in (b'\xff\xfe', b'\xfe\xff') else _raw.decode('utf-8', errors='replace')
+            for _line in _text.splitlines():
+                _line = _line.strip()
+                if _line.lower().startswith('terminal_path='):
+                    _p = _line.split('=', 1)[1].strip()
+                    if _p and os.path.exists(os.path.join(_p, 'terminal.exe')):
+                        return _p
+    except Exception:
+        pass
+    # 2순위: 일반 경로 탐색
     for p in [r'C:\AG TO DO\MT4', r'C:\MT4', r'D:\MT4',
               r'C:\Program Files\MetaTrader 4',
               r'C:\Program Files (x86)\MetaTrader 4']:
@@ -845,11 +861,15 @@ def run_folder_queue():
     if os.path.exists(_sel_file):
         try:
             _sel_data = json.load(open(_sel_file, encoding='utf-8'))
-            _sel_list = _sel_data.get('selected', [])
-            _step     = max(1, int(_sel_data.get('step', 1)))
+            _sel_list     = _sel_data.get('selected', [])
+            _step         = max(1, int(_sel_data.get('step', 1)))
+            _file_filter  = _sel_data.get('file_filter', None) or None
+            _filter_folder= _sel_data.get('filter_folder', None)
             if _sel_list:
                 _selected_set = set(_sel_list)
                 print('  [QUEUE] 선택 폴더 필터: %d개 — %s' % (len(_sel_list), ', '.join(_sel_list)))
+            if _file_filter:
+                print('  [QUEUE] 파일 필터 적용: %d개 파일 (폴더: %s)' % (len(_file_filter), _filter_folder))
             if _step > 1:
                 print('  [QUEUE] 스텝 샘플링: %d번째마다 1개 (1, %d, %d, ...)' % (_step, _step+1, 2*_step+1))
             else:
@@ -859,12 +879,29 @@ def run_folder_queue():
     else:
         print('  [QUEUE] 필터링 없이 모든 폴더를 순차 실행합니다.')
 
+    _pause_file = os.path.join(CONFIGS_DIR, 'runner_pause.signal')
+    _stop_file  = os.path.join(CONFIGS_DIR, 'runner_stop.signal')
+
     while True:
+        # 정지 신호 확인
+        if os.path.exists(_stop_file):
+            print('  [QUEUE] 정지 신호 감지 — 종료')
+            break
+
+        # 일시정지 신호 확인 (파일이 있는 동안 대기)
+        if os.path.exists(_pause_file):
+            print('  [QUEUE] ⏸ 일시정지 중... (resume.signal 삭제 시 재개)')
+            while os.path.exists(_pause_file):
+                if os.path.exists(_stop_file):
+                    break
+                import time; time.sleep(2)
+            print('  [QUEUE] ▶ 재개')
+
         # [v8.4] 무한루프 방지를 위한 짧은 휴식 및 큐 상태 강제 갱신
         import time
         time.sleep(1)
-        
-        fq = FolderQueue() 
+
+        fq = FolderQueue()
         _log_debug("--- fq.get_next_pending() 호출 시작 ---")
         folder_info = fq.get_next_pending()
         if not folder_info:
@@ -874,9 +911,10 @@ def run_folder_queue():
         folder_name = folder_info['name']
         _log_debug(f"대상 폴더 감지: {folder_name}")
 
-        # 선택 필터 적용
+        # 선택 필터 적용 — 스킵 시 mark_done으로 큐에서 제거해야 무한루프 방지
         if _selected_set is not None and folder_name not in _selected_set:
             _log_debug(f"필터(SelectedSet)에 의해 스킵됨: {folder_name}")
+            fq.mark_done(folder_name)
             continue
         ex4_files   = fq.get_ex4_files(folder_name)
         total_ex4 = len(ex4_files)
@@ -957,54 +995,110 @@ def run_folder_queue():
             fq.mark_error(folder_name, '?좏슚??EA ?놁쓬')
             continue
 
-        # 백테스트 실행 (run_round 유사)
-        round_num = 1  # 폴더 당 모드에서는 라운드 번호 고정
-        
-        try:
-            # [v8.4] 중요: 매 폴더 시작 전 진행상황 파일을 지워야 엔진이 처음부터 백테스트를 수행함
-            for _f in [f'round_{round_num}_progress.json', 'command.json', 'test_completed.flag']:
+        # ── R1 백테스트 실행 (LHS 기반) ─────────────────────────
+        round_num = 1
+        all_round_results = []
+
+        def _clean_flags(rn):
+            for _f in [f'round_{rn}_progress.json', 'command.json', 'test_completed.flag']:
                 _p = os.path.join(CONFIGS_DIR, _f)
                 if os.path.exists(_p):
                     try: os.remove(_p)
                     except: pass
-                    
+
+        try:
+            _clean_flags(round_num)
             results = run_round(round_num, scenarios_map)
         except Exception as e:
-            print('  [ERR] %s 라운드 실행 중 치명적 오류: %s' % (folder_name, e))
+            print('  [ERR] %s R1 실행 오류: %s' % (folder_name, e))
             _log_debug(f"폴더 실행 중 에러 발생: {e}")
             fq.mark_error(folder_name, f'실행 오류: {e}')
             continue
         finally:
-            # [v8.3] 사후 청소: 다음 폴더가 오동작하지 않도록 플래그 즉시 삭제
-            for _f in ['command.json', 'test_completed.flag']:
-                _p = os.path.join(CONFIGS_DIR, _f)
-                if os.path.exists(_p):
-                    try: os.remove(_p)
-                    except: pass
+            _clean_flags(round_num)
 
-        # 寃곌낵 ???(?대뜑蹂?蹂꾨룄 ?뚯씪)
-        ts     = datetime.now().strftime('%m%d_%H%M')
-        safe   = folder_name.replace(' ', '_')
-        rfile  = os.path.join(RESULTS_DIR,
-                              'V7_FOLDER_%s_%s.json' % (safe, ts))
+        all_round_results.extend(results or [])
+
+        # R1 결과 저장
+        ts   = datetime.now().strftime('%m%d_%H%M')
+        safe = folder_name.replace(' ', '_')
+        rfile = os.path.join(RESULTS_DIR, 'V7_FOLDER_%s_R01_%s.json' % (safe, ts))
         try:
             with open(rfile, 'w', encoding='utf-8') as f:
-                json.dump({
-                    'mode':        'folder_queue',
-                    'folder':      folder_name,
-                    'symbols':     SYMBOLS,
-                    'timeframes':  TIMEFRAMES,
-                    'from_date':   FROM_DATE,
-                    'to_date':     TO_DATE,
-                    'results':     results,
-                }, f, indent=2, ensure_ascii=False)
-            print('  [QUEUE] 寃곌낵 ??? %s' % os.path.basename(rfile))
+                json.dump({'mode': 'folder_queue', 'folder': folder_name,
+                           'round': 1, 'symbols': SYMBOLS, 'timeframes': TIMEFRAMES,
+                           'from_date': FROM_DATE, 'to_date': TO_DATE,
+                           'results': results}, f, indent=2, ensure_ascii=False)
+            print('  [QUEUE] R1 결과 저장: %s' % os.path.basename(rfile))
         except Exception as e:
-            print('  [WARN] 寃곌낵 ????ㅽ뙣: %s' % e)
+            print('  [WARN] R1 결과 저장 실패: %s' % e)
 
-        # ?꾨즺 -> AFTER_FOR_TEST ?대룞
+        # ── R2~N: LHS→FOCUSED→GENETIC 자동 진화 ─────────────
+        from core.sampler import get_samples_for_round
+        from core.param_space import make_g4_param_space
+        _param_space = make_g4_param_space(extra_params=True)
+        _max_rounds = int(_sel_data.get('max_rounds', 1)) if _sel_data else 1
+
+        for round_num in range(2, _max_rounds + 1):
+            if os.path.exists(_stop_file):
+                print('  [QUEUE] 정지 신호 — 라운드 진화 중단')
+                break
+            if os.path.exists(_pause_file):
+                print('  [QUEUE] ⏸ 일시정지...')
+                while os.path.exists(_pause_file):
+                    if os.path.exists(_stop_file): break
+                    import time as _t; _t.sleep(2)
+                print('  [QUEUE] ▶ 재개')
+
+            prev = sorted(all_round_results, key=lambda x: x.get('score', 0), reverse=True)
+            if not prev:
+                print('  [QUEUE] 이전 결과 없음 — 라운드 진화 중단')
+                break
+
+            strategy = 'LHS' if round_num <= 2 else ('FOCUSED' if round_num <= 5 else 'GENETIC')
+            print('\n  [QUEUE] === R%d (%s) -- %s ===' % (round_num, strategy, folder_name))
+
+            try:
+                samples = get_samples_for_round(_param_space, round_num, prev,
+                                                n=SAMPLES_PER_ROUND, seed=42 + round_num)
+                new_scenarios = generate_round_files(samples, round_num)
+            except Exception as e:
+                print('  [ERR] R%d 샘플/EA 생성 실패: %s' % (round_num, e))
+                break
+
+            try:
+                _clean_flags(round_num)
+                r_results = run_round(round_num, new_scenarios)
+            except Exception as e:
+                print('  [ERR] R%d 실행 오류: %s' % (round_num, e))
+                _log_debug(f"R{round_num} 실행 오류: {e}")
+                break
+            finally:
+                _clean_flags(round_num)
+
+            all_round_results.extend(r_results or [])
+
+            ts2 = datetime.now().strftime('%m%d_%H%M')
+            rfile2 = os.path.join(RESULTS_DIR, 'V7_FOLDER_%s_R%02d_%s.json' % (safe, round_num, ts2))
+            try:
+                with open(rfile2, 'w', encoding='utf-8') as f:
+                    json.dump({'mode': 'folder_queue', 'folder': folder_name,
+                               'round': round_num, 'strategy': strategy,
+                               'symbols': SYMBOLS, 'timeframes': TIMEFRAMES,
+                               'from_date': FROM_DATE, 'to_date': TO_DATE,
+                               'results': r_results}, f, indent=2, ensure_ascii=False)
+                print('  [QUEUE] R%d 결과 저장: %s' % (round_num, os.path.basename(rfile2)))
+            except Exception as e:
+                print('  [WARN] R%d 결과 저장 실패: %s' % (round_num, e))
+
+            top3 = sorted(r_results or [], key=lambda x: x.get('score', 0), reverse=True)[:3]
+            for i, r in enumerate(top3, 1):
+                print('  TOP%d: score=%.1f profit=$%,.0f dd=%.1f%% %s' % (
+                    i, r.get('score', 0), r.get('profit', 0),
+                    r.get('drawdown_pct', 0), r.get('ea_name', '')[:40]))
+
         fq.mark_done(folder_name)
-        print('  [QUEUE] %s ?꾨즺 -> ?ㅼ쓬 ?대뜑濡?..\n' % folder_name)
+        print('  [QUEUE] %s 완료 (%d라운드) -> 다음 폴더로..' % (folder_name, _max_rounds))
 
     print('\n' + '#' * 60)
     print('  ?대뜑 ???꾩껜 ?꾨즺. 寃곌낵: %s' % RESULTS_DIR)

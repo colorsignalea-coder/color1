@@ -255,6 +255,14 @@ class RunControlTab(ttk.Frame):
                            self._run_folder_queue,
                            font=("Malgun Gothic", 10, "bold"), pady=4, padx=16)
         self.btn_queue.pack(side="left")
+        self._paused = False
+        self._btn_pause = tk.Button(ctrl_row2, text="⏸ 일시정지",
+                                    font=("Malgun Gothic", 9, "bold"),
+                                    bg="#92400e", fg="white",
+                                    relief="flat", bd=0, padx=10, pady=4,
+                                    cursor="hand2",
+                                    command=self._toggle_pause)
+        self._btn_pause.pack(side="left", padx=(6, 0))
         self._lbl_queue_status = tk.Label(
             ctrl_row2, text="대기 중", bg=self.PNL, fg="#6b7280",
             font=("Malgun Gothic", 9)
@@ -1016,6 +1024,25 @@ class RunControlTab(ttk.Frame):
         for v in self._queue_vars.values():
             v.set(False)
         self._update_queue_status_label()
+
+    def _toggle_pause(self):
+        """일시정지 / 재개 토글."""
+        pause_file = os.path.join(self.G4_CONFIGS, 'runner_pause.signal')
+        if not self._paused:
+            # 일시정지
+            open(pause_file, 'w').close()
+            self._paused = True
+            self._btn_pause.config(text="▶ 재개", bg="#15803d")
+            self._lbl_queue_status.config(text="⏸ 일시정지 중", fg="#f59e0b")
+            self._append("⏸ 일시정지 — 현재 파일 완료 후 대기\n", "warn")
+        else:
+            # 재개
+            if os.path.exists(pause_file):
+                os.remove(pause_file)
+            self._paused = False
+            self._btn_pause.config(text="⏸ 일시정지", bg="#92400e")
+            self._lbl_queue_status.config(text="실행 중...", fg="#f97316")
+            self._append("▶ 재개\n", "ok")
 
     def _update_queue_status_label(self):
         try:
