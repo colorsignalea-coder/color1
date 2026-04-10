@@ -60,6 +60,27 @@ EXPERTS_DIR = os.path.join(MT4_DIR, r'MQL4\Experts')
 BACKUP_ROOT = os.path.join(MT4_DIR, r'MQL4\_EXPERTS_BACKUP_V7')
 ME_EXE      = os.path.join(MT4_DIR, 'metaeditor.exe')
 
+def _restart_mt4_for_new_round():
+    """새 EA 파일 인식을 위해 MT4 재시작 (라운드 전환 시 호출)."""
+    print('  [MT4] 새 EA 파일 인식 위해 MT4 재시작...')
+    # MT4 종료
+    subprocess.run(['taskkill', '/F', '/IM', 'terminal.exe'],
+                   capture_output=True)
+    time.sleep(4)
+    # MT4 재시작 (포터블 모드 우선)
+    mt4 = _find_mt4()
+    portable_bat = os.path.join(mt4, 'Start_Portable.bat')
+    if os.path.exists(portable_bat):
+        subprocess.Popen(['cmd', '/c', portable_bat], cwd=mt4,
+                         creationflags=subprocess.CREATE_NO_WINDOW)
+    else:
+        subprocess.Popen([os.path.join(mt4, 'terminal.exe'), '/portable'],
+                         cwd=mt4,
+                         creationflags=subprocess.CREATE_NO_WINDOW)
+    print('  [MT4] 재시작 후 30초 대기...')
+    time.sleep(30)
+    print('  [MT4] 준비 완료')
+
 os.makedirs(RESULTS_DIR, exist_ok=True)
 os.makedirs(BACKUP_ROOT, exist_ok=True)
 os.makedirs(READY_DIR,   exist_ok=True)
@@ -1085,6 +1106,8 @@ def run_folder_queue():
                 samples = get_samples_for_round(_param_space, round_num, prev,
                                                 n=SAMPLES_PER_ROUND, seed=42 + round_num)
                 new_scenarios = generate_round_files(samples, round_num)
+                # 새 EA 파일 인식을 위해 MT4 재시작
+                _restart_mt4_for_new_round()
             except Exception as e:
                 print('  [ERR] R%d 샘플/EA 생성 실패: %s' % (round_num, e))
                 break
@@ -1230,6 +1253,9 @@ if __name__ == '__main__':
             if not _sc_map:
                 print('  [ERR] R%d 시나리오 없음' % _rn)
                 break
+
+            # 새 EA 파일 인식을 위해 MT4 재시작
+            _restart_mt4_for_new_round()
 
             def _evo_clean(_n):
                 for _fn in ['round_%d_progress.json' % _n, 'command.json', 'test_completed.flag']:
