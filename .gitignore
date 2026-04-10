@@ -1,0 +1,35 @@
+# 결과/레포트 — 외부 노출 금지
+reports/
+g4_results/
+g4_results_bak*/
+*.htm
+*.html
+
+# MT4 컴파일 결과
+*.ex4
+*.ex5
+
+# 설정 (개인정보)
+configs/
+*.ini
+*.json
+
+# 로그
+*.log
+*.txt
+
+# Python 캐시
+__pycache__/
+*.pyc
+*.pyo
+
+# 백업 파일
+*.bak*
+*_backup.py
+*_bak.py
+*_BACKUP/
+BACKUP_*/
+
+# 임시
+*.tmp
+.agents/
