@@ -1162,6 +1162,116 @@ if __name__ == '__main__':
                 results  = run_round(_rn, sc_map)
             if results:
                 backup_round_files(_rn)
+    elif '--evolve' in sys.argv:
+        # --evolve [--rounds N] [--start R]  : 기존 결과 기반 자동 진화
+        _max_r = 6
+        _start_r = None
+        if '--rounds' in sys.argv:
+            _i = sys.argv.index('--rounds')
+            _max_r = int(sys.argv[_i + 1]) if _i + 1 < len(sys.argv) else 6
+        if '--start' in sys.argv:
+            _i = sys.argv.index('--start')
+            _start_r = int(sys.argv[_i + 1]) if _i + 1 < len(sys.argv) else None
+
+        from core.sampler import get_samples_for_round
+
+        # 기존 결과 전체 로드
+        _all_prev = []
+        for _rf in sorted(glob.glob(os.path.join(RESULTS_DIR, '*.json'))):
+            try:
+                with open(_rf, encoding='utf-8') as _fp:
+                    _rd = json.load(_fp)
+                _all_prev.extend(_rd.get('results', []))
+            except Exception:
+                pass
+
+        if not _all_prev:
+            print('  [EVO] 결과 없음. 먼저 R1을 실행하세요.')
+            sys.exit(1)
+
+        # 완료된 마지막 라운드 감지
+        _last_done = 0
+        for _rf in glob.glob(os.path.join(RESULTS_DIR, '*.json')):
+            try:
+                with open(_rf, encoding='utf-8') as _fp:
+                    _rd = json.load(_fp)
+                _r = _rd.get('round') or 0
+                if not _r and _rd.get('results'):
+                    _r = max((x.get('round') or 0) for x in _rd['results'])
+                if _r > _last_done:
+                    _last_done = _r
+            except Exception:
+                pass
+
+        _begin = _start_r if _start_r else max(2, _last_done + 1)
+        _param_space = make_g4_param_space(extra_params=True)
+        _stop_f  = os.path.join(CONFIGS_DIR, 'runner_stop.signal')
+        _pause_f = os.path.join(CONFIGS_DIR, 'runner_pause.signal')
+
+        print('\n' + '#' * 60)
+        print('  AUTO EVOLUTION  R%d ~ R%d' % (_begin, _max_r))
+        print('  기존 결과: %d개  최근완료: R%d' % (len(_all_prev), _last_done))
+        print('#' * 60 + '\n')
+
+        for _rn in range(_begin, _max_r + 1):
+            if os.path.exists(_stop_f):
+                print('  [EVO] 정지 신호 — 종료')
+                break
+            while os.path.exists(_pause_f):
+                if os.path.exists(_stop_f): break
+                import time as _tm; _tm.sleep(2)
+
+            _strat = 'LHS' if _rn <= 2 else ('FOCUSED' if _rn <= 5 else 'GENETIC')
+            print('\n  === R%d (%s) ===' % (_rn, _strat))
+
+            _samples = get_samples_for_round(_param_space, _rn, _all_prev,
+                                             n=SAMPLES_PER_ROUND, seed=42 + _rn * 7)
+            _sc_map  = generate_round_files(_samples, _rn)
+            if not _sc_map:
+                print('  [ERR] R%d 시나리오 없음' % _rn)
+                break
+
+            def _evo_clean(_n):
+                for _fn in ['round_%d_progress.json' % _n, 'command.json', 'test_completed.flag']:
+                    _p = os.path.join(CONFIGS_DIR, _fn)
+                    if os.path.exists(_p):
+                        try: os.remove(_p)
+                        except: pass
+
+            _evo_clean(_rn)
+            _r_res = run_round(_rn, _sc_map)
+            _evo_clean(_rn)
+
+            if not _r_res:
+                print('  [WARN] R%d 결과 없음' % _rn)
+                break
+
+            _all_prev.extend(_r_res)
+
+            _ts2 = datetime.now().strftime('%m%d_%H%M')
+            _rfile2 = os.path.join(RESULTS_DIR, 'V7_EVO_R%02d_%s.json' % (_rn, _ts2))
+            try:
+                with open(_rfile2, 'w', encoding='utf-8') as _f2:
+                    json.dump({'mode': 'evolution', 'round': _rn, 'strategy': _strat,
+                               'symbols': SYMBOLS, 'timeframes': TIMEFRAMES,
+                               'from_date': FROM_DATE, 'to_date': TO_DATE,
+                               'results': _r_res}, _f2, indent=2, ensure_ascii=False)
+                print('  [EVO] R%d 결과 저장: %s' % (_rn, os.path.basename(_rfile2)))
+            except Exception as _e2:
+                print('  [WARN] 저장 실패: %s' % _e2)
+
+            _top5 = sorted(_r_res, key=lambda x: x.get('score', 0), reverse=True)[:5]
+            print('  --- R%d TOP5 ---' % _rn)
+            for _i2, _r2 in enumerate(_top5, 1):
+                print('  %d. score=%.1f profit=$%,.0f dd=%.1f%% %s' % (
+                    _i2, _r2.get('score', 0), _r2.get('profit', 0),
+                    _r2.get('drawdown_pct', 0), _r2.get('ea_name', '')[:45]))
+
+            backup_round_files(_rn)
+
+        print('\n' + '#' * 60)
+        print('  진화 완료. 결과: %s' % RESULTS_DIR)
+        print('#' * 60 + '\n')
     else:
         main()
 

@@ -284,6 +284,23 @@ class RunControlTab(ttk.Frame):
         )
         self._lbl_queue_status.pack(side="left", padx=10)
 
+        # 버튼행 3: 자동 진화 시작 (기존 결과 기반 R2+)
+        ctrl_row3 = tk.Frame(queue_f, bg=self.PNL)
+        ctrl_row3.pack(fill="x", padx=8, pady=(0, 8))
+        self._btn_evo = tk.Button(
+            ctrl_row3, text="🧬  자동 진화 시작 (기존 결과→R2+ FOCUSED/GENETIC)",
+            font=("Malgun Gothic", 9, "bold"),
+            bg="#065f46", fg="white",
+            relief="flat", bd=0, padx=12, pady=5, cursor="hand2",
+            command=self._run_evolution
+        )
+        self._btn_evo.pack(side="left")
+        self._lbl_evo_status = tk.Label(
+            ctrl_row3, text="", bg=self.PNL, fg="#6b7280",
+            font=("Malgun Gothic", 8)
+        )
+        self._lbl_evo_status.pack(side="left", padx=8)
+
         # (데이터 새로고침 호출부 하단으로 이동됨)
 
         # ── 세션 저장/불러오기 패널 ────────────────────────────────
@@ -1047,6 +1064,50 @@ class RunControlTab(ttk.Frame):
                 btn.config(bg="#7c3aed", fg="white")
             else:
                 btn.config(bg="#1e3a5f", fg="#94a3b8")
+
+    def _run_evolution(self):
+        """기존 R1 결과 기반으로 R2+ 자동 진화 실행."""
+        evo_script = os.path.join(HERE, 'run_evolution.py')
+        if not os.path.exists(evo_script):
+            messagebox.showerror("오류", "run_evolution.py 없음")
+            return
+
+        max_rounds = max(2, self._max_rounds_var.get())
+        self._btn_evo.config(state="disabled")
+        self._lbl_evo_status.config(text="진화 실행 중... (R2~R%d)" % max_rounds, fg="#f97316")
+        self._append("🧬 자동 진화 시작 (R2~R%d FOCUSED/GENETIC)\n" % max_rounds, "ok")
+
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+
+        def _run():
+            try:
+                proc = subprocess.Popen(
+                    [sys.executable, "-u", evo_script,
+                     "--rounds", str(max_rounds)],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    env=env, cwd=HERE,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                )
+                for line in iter(proc.stdout.readline, b""):
+                    try:
+                        txt = line.decode("utf-8", errors="replace")
+                    except Exception:
+                        txt = ""
+                    if txt.strip():
+                        self.after(0, lambda t=txt: self._append(t))
+                proc.wait()
+            except Exception as e:
+                self.after(0, lambda: self._append("  [ERR] 진화 오류: %s\n" % e, "err"))
+            finally:
+                self.after(0, self._evo_done)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _evo_done(self):
+        self._btn_evo.config(state="normal")
+        self._lbl_evo_status.config(text="진화 완료", fg="#16a34a")
+        self._append("🧬 자동 진화 완료\n", "ok")
 
     def _toggle_pause(self):
         """일시정지 / 재개 토글."""
